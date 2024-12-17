@@ -1,0 +1,178 @@
+#pragma once
+#include <Arduino.h>
+#include <SPI.h>
+
+#define BTN_1 D7
+#define BTN_2 D9
+
+#ifdef LORA_ENABLED
+#include <LoRa.h>
+#define LORA_CS D10
+#define LORA_RST D2
+#define LORA_DI0 D3
+#define LORA_DIO1 D4
+#define LORA_DIO2 D5
+
+
+
+bool initLoRa(int syncWord){
+    Serial.print("Init LoRa modem....");
+    
+    LoRa.setPins(LORA_CS, LORA_RST, LORA_DI0);
+    uint count = 0;
+
+    while (!LoRa.begin(866E6)) {
+      Serial.print(".");
+      delay(500);
+      count++;
+      if(count >=6) return false;
+    }
+    Serial.println();
+
+    if(syncWord > 0)
+      LoRa.setSyncWord(syncWord);
+    Serial.println("LoRa Initializing OK!");
+    return true;
+
+}
+
+#endif
+
+#ifdef ZIGBEE_ENABLED
+#include <mrf24j.h>
+#define ZIGBEE_MISO 12
+#define ZIGBEE_MOSI 11
+#define ZIGBEE_SCLK 13
+#define ZIGBEE_CS 6
+#define ZIGBEE_INT 8
+#define ZIGBEE_RST -1
+
+Mrf24j *zigbee;
+SPIClass radio_spi(HSPI);
+
+void zigbee_routine() {
+  zigbee->interrupt_handler(); // mrf24 object interrupt routine
+}
+
+void initZigBee(int channel, int panID, int address){
+    radio_spi.setBitOrder(MSBFIRST);
+    radio_spi.setDataMode(SPI_MODE0);
+    radio_spi.begin(ZIGBEE_SCLK, ZIGBEE_MISO, ZIGBEE_MOSI, ZIGBEE_CS);
+
+    zigbee = new Mrf24j(ZIGBEE_RST, ZIGBEE_CS, ZIGBEE_INT, -1, &radio_spi);
+
+    zigbee->reset();
+    zigbee->init();
+    zigbee->set_pan(panID);
+    zigbee->address16_write(address);
+    zigbee->set_channel(channel);
+    zigbee->set_promiscuous(true);
+    zigbee->set_bufferPHY(true);
+    attachInterrupt(ZIGBEE_INT, zigbee_routine, CHANGE);
+    Serial.println("ZigBee Initializing OK!");
+    //display.println("[ OK ] ZigBee modem");
+    //display.display();
+}
+
+#endif
+
+#ifdef DISPLAY_ENABLED
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+
+#define OLED_SDA 21
+#define OLED_SCL 22
+#define OLED_RESET -1
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 64 // OLED display height, in pixels
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+void initDisplay(){
+  
+  Serial.println("Init display...");
+  Wire.begin(OLED_SDA, OLED_SCL);
+  //Wire.setPins(OLED_SDA, OLED_SCL);
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Address 0x3C for 128x32
+    Serial.println(F("SSD1306 allocation failed"));
+  } else {
+    //display.clearDisplay();
+    //display.display();
+
+    //display.clearBuffer();
+    //display.setFont(u8g2_font_ncenB12_tr);
+    display.clearDisplay();
+    display.setTextSize(1); 
+    display.setTextColor(WHITE);
+    display.display();
+    //display.firstPage();
+    //display.setFont(u8g2_font_ncenB10_tr);
+    //display.setTextColor(WHITE);
+    //display.setTextSize(1);
+    //display.setCursor(0,0);
+    //display.firstPage();
+    //display.display();
+    delay(200);
+    //display.clearDisplay();
+    //display.setCursor(0,0);
+    //display.println("[ OK ] Display");
+    //display.display();
+    Serial.println("Display Initializing OK!");
+  }
+}
+
+#endif
+
+#ifdef LEDS_ENABLED //17,18,19,20,23
+
+#define LED_RED A2
+#define LED_YELLOW A1
+#define LED_GREEN A0
+#define LED_RGB_R 14
+#define LED_RGB_G 15
+#define LED_RGB_B 16
+#endif
+
+
+#ifdef LEDS_ENABLED
+void initLEDs()
+{
+    
+    //pinMode(LED_WHITE, OUTPUT);
+    pinMode(LED_RED, OUTPUT);
+    //pinMode(LED_BLUE, OUTPUT);
+    pinMode(LED_GREEN, OUTPUT);
+    pinMode(LED_YELLOW, OUTPUT);
+  
+
+    pinMode(LED_RGB_R, OUTPUT);
+    pinMode(LED_RGB_G, OUTPUT);
+    pinMode(LED_RGB_B, OUTPUT);
+}
+
+void setColor(int R, int G, int B) {
+  analogWrite(LED_RGB_R,   R);
+  analogWrite(LED_RGB_G, G);
+  analogWrite(LED_RGB_B,  B);
+}
+
+void turnOnLEDS(){
+  //digitalWrite(LED_BLUE, HIGH);
+  digitalWrite(LED_RED, HIGH);
+  //digitalWrite(LED_WHITE, HIGH);
+  digitalWrite(LED_GREEN, HIGH);
+  digitalWrite(LED_YELLOW, HIGH);
+}
+void turnOffLEDS(){
+  //digitalWrite(LED_BLUE, LOW);
+  digitalWrite(LED_RED, LOW);
+  //digitalWrite(LED_WHITE, LOW);
+  digitalWrite(LED_GREEN, LOW);
+  digitalWrite(LED_YELLOW, LOW);
+}
+#endif
+
+
+

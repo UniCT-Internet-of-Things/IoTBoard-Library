@@ -1,0 +1,25 @@
+{
+    "name": "IoT Board",
+    "version": "1.0.0",
+    "description": "ARSLab IoT Board library",
+    "repository":
+    {
+      "type": "git",
+      "url": "https://github.com/username/hello-world.git"
+    },
+    "authors":
+    [
+      {
+        "name": "Federico Fausto Santoro",
+        "email": "federico.santoro@unict.it"
+      }
+    ],
+    "license": "MIT",
+    "homepage": "https://www.helloworld.org/",
+    "dependencies": {
+  
+
+    },
+    "frameworks": "arduino",
+    "platforms": "espressif32@6.9.0"
+  }
