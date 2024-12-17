@@ -510,6 +510,7 @@ void LoRaWANClass::update(void)
             bool isConfirmed =  ((Message_Rx.MAC_Header & 0xE0)>>5) == 5 ? true : false ; // MType
             uint8_t fPort = Message_Rx.Frame_Port;
             if(_instance_lorawan.messageCallback) _instance_lorawan.messageCallback(&Buffer_Rx, isConfirmed, fPort);
+            
             Rx_Status = NEW_RX;
             Serial.println("Data received over RX1");
             
