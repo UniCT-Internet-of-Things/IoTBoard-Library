@@ -32,6 +32,10 @@ void onBtn1Released(uint8_t pinBtn){
 
 void onLoRaReceive (sBuffer *Data_Rx, bool isConfirmed, uint8_t fPort){
     Serial.println("Ricevuto qualcosa");
+    Serial.println(isConfirmed);
+    Serial.println(fPort);
+    String s = String((char *) Data_Rx->Data, HEX);
+    Serial.println(s);
 }
 
 void setup()
@@ -47,13 +51,12 @@ void setup()
     IoTBoard::init_spi();
     display->println("SPI (HSPI) enabled");
     display->display();
-
+    
     if(IoTBoard::init_lorawan()){
+        
         display->println("LoRaWAN enabled");
         lorawan->setDeviceClass(CLASS_A);
-
-        // Set Data Rate
-        lorawan->setDataRate(SF7BW125);
+        lorawan->setDataRate(SF9BW125);
 
         // set channel to random
         lorawan->setChannel(MULTI);
@@ -62,6 +65,7 @@ void setup()
         lorawan->setNwkSKey(nwkSKey);
         lorawan->setAppSKey(appSKey);
         lorawan->setDevAddr(devAddr);
+        lorawan->setRx1Delay(1000);
         lorawan->onMessage(&onLoRaReceive);
 
     } else {
@@ -81,29 +85,28 @@ void loop()
 
     if(runEvery(10000)){
         sprintf(myStr, "Hello-%d", count_sent); 
-        lorawan->sendUplink(myStr, strlen(myStr), 0, 1);
+        lorawan->sendUplink(myStr, strlen(myStr), 1, 2);
         count_sent++;
     }
 
 
-    lorawan->update();
+    //lorawan->update();
 
  
 
     recvStatus = lorawan->readData(outStr);
-    if(recvStatus) {
-        Serial.println(outStr);
-        display->clearDisplay();
-        display->setCursor(0,0);
-        display->println(outStr);
-        display->display();
-    }
+    // if(recvStatus) {
+    //   Serial.println("HO RICEVUTO COSE");
+    //     Serial.println(outStr);
+    //     display->clearDisplay();
+    //     display->setCursor(0,0);
+    //     display->println(outStr);
+    //     display->display();
+    // }
 
-    delay(200);
+    //delay(200);
     
   // Check Lora RX
     lorawan->update();
-
-    
     delay(1);
 }

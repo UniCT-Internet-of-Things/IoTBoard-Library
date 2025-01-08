@@ -22,6 +22,8 @@ const sRFM_pins RFM_pins = {
 void IoTBoardClass::init_serial(uint baudrate){
     delay(2000);
     Serial.begin(baudrate);
+    Serial.println("[OK]\tSerial Initialised");
+    
 }
 
 void IoTBoardClass::init_leds(){
@@ -40,6 +42,7 @@ void IoTBoardClass::init_leds(){
     digitalWrite(LED_RGB_R, HIGH);
     digitalWrite(LED_RGB_G, HIGH);
     digitalWrite(LED_BUILTIN, HIGH);
+    Serial.println("[OK]\tLEDs Initialised");
 
 }
 
@@ -129,6 +132,7 @@ bool IoTBoardClass::init_lora(){
 void IoTBoardClass::init_buttons(){
     buttons = new Buttons();
     buttons->init_buttons();
+    Serial.println("[OK]\tButtons Initialised");
 }
 
 bool IoTBoardClass::init_lorawan(){
@@ -152,6 +156,8 @@ bool IoTBoardClass::init_lorawan(){
         pinMode(ZIGBEE_WAKE, OUTPUT);
         digitalWrite(ZIGBEE_WAKE, HIGH);
     }
+
+    
 
     if(!lorawan->init(*radios_spi)){
         Serial.println("[ERROR][LoRaWAN] Can not initialise the module");
