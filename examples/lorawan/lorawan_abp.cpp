@@ -65,7 +65,7 @@ void setup()
         lorawan->setNwkSKey(nwkSKey);
         lorawan->setAppSKey(appSKey);
         lorawan->setDevAddr(devAddr);
-        lorawan->setRx1Delay(1000);
+        
         lorawan->onMessage(&onLoRaReceive);
 
     } else {
@@ -90,21 +90,8 @@ void loop()
     }
 
 
-    //lorawan->update();
-
- 
-
     recvStatus = lorawan->readData(outStr);
-    // if(recvStatus) {
-    //   Serial.println("HO RICEVUTO COSE");
-    //     Serial.println(outStr);
-    //     display->clearDisplay();
-    //     display->setCursor(0,0);
-    //     display->println(outStr);
-    //     display->display();
-    // }
 
-    //delay(200);
     
   // Check Lora RX
     lorawan->update();

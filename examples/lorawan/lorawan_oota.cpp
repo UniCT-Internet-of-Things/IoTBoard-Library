@@ -4,10 +4,6 @@ int count = 0;
 int count_sent = 0;
 bool displayNeedUpdate = false;
 
-const char *devAddr = "260B3E70";
-const char *nwkSKey = "AF0D4340E12A7333A23BB42D239C2C5A";
-const char *appSKey = "909745BCD7A80913AAAD9138B8D7FAA7";
-
 
 // OTAA credentials
 const char *devEui = "70B3D57ED006D4DB";
