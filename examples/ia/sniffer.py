@@ -17,7 +17,6 @@ if __name__ == "__main__":
         baudrate=args.baudrate,
     )
 
- 
 
     if not ser.is_open:
         print("Error opening the Seril port")
