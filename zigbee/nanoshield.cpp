@@ -6,7 +6,7 @@
  * Copyright (c) 2015 Circuitar
  * This software is released under the MIT license. See the attached LICENSE file for details.
 */
-#include <nanoshield.h>
+#include "nanoshield.h"
 
 #define MRF_RXMCR    0x00
 #define MRF_PANIDL   0x01
@@ -44,7 +44,8 @@
 
 SPISettings Nanoshield_MRF::spiSettings = SPISettings(8000000, MSBFIRST, SPI_MODE0);
 
-Nanoshield_MRF::Nanoshield_MRF(Mrf24j40Type type, int cs) {
+
+Nanoshield_MRF::Nanoshield_MRF(Mrf24j40Type type, int cs, SPIClass * spi) {
   this->cs = cs;
   this->type = type;
   this->panId = 0;
@@ -55,12 +56,13 @@ Nanoshield_MRF::Nanoshield_MRF(Mrf24j40Type type, int cs) {
   this->rxCount = 0;
   this->rssi = 0;
   this->lqi = 0;
+  this->_spi = spi;
 }
 
 void Nanoshield_MRF::begin() {
   pinMode(cs, OUTPUT);
   digitalWrite(cs, HIGH);
-  SPI.begin();
+  //this->_spi->begin();
   init();
 }
 
@@ -392,43 +394,51 @@ void Nanoshield_MRF::enablePaLna() {
 }
 
 uint8_t Nanoshield_MRF::readShort(uint8_t addr) {
-  SPI.beginTransaction(spiSettings);
+  this->_spi->beginTransaction(spiSettings);
   digitalWrite(cs, LOW);
-  SPI.transfer(addr << 1 & 0b01111110);
-  uint8_t result = SPI.transfer(0);
+  this->_spi->transfer(addr << 1 & 0b01111110);
+  uint8_t result = this->_spi->transfer(0);
   digitalWrite(cs, HIGH);
-  SPI.endTransaction();
+  this->_spi->endTransaction();
   return result;
 }
 
+void Nanoshield_MRF::setPromiscuous(boolean enabled) {
+    if (enabled) {
+        writeShort(MRF_RXMCR, 0x01);
+    } else {
+        writeShort(MRF_RXMCR, 0x00);
+    }
+}
+
 void Nanoshield_MRF::writeShort(uint8_t addr, uint8_t data) {
-  SPI.beginTransaction(spiSettings);
+  this->_spi->beginTransaction(spiSettings);
   digitalWrite(cs, LOW);
-  SPI.transfer((addr << 1 & 0b01111110) | 0b00000001);
-  SPI.transfer(data);
+  this->_spi->transfer((addr << 1 & 0b01111110) | 0b00000001);
+  this->_spi->transfer(data);
   digitalWrite(cs, HIGH);
-  SPI.endTransaction();
+  this->_spi->endTransaction();
 }
 
 uint8_t Nanoshield_MRF::readLong(uint16_t addr) {
-  SPI.beginTransaction(spiSettings);
+  this->_spi->beginTransaction(spiSettings);
   digitalWrite(cs, LOW);
-  SPI.transfer(addr >> 3 | 0b10000000);
-  SPI.transfer(addr << 5);
-  uint8_t result = SPI.transfer(0);
+  this->_spi->transfer(addr >> 3 | 0b10000000);
+  this->_spi->transfer(addr << 5);
+  uint8_t result = this->_spi->transfer(0);
   digitalWrite(cs, HIGH);
-  SPI.endTransaction();
+  this->_spi->endTransaction();
   return result;
 }
 
 void Nanoshield_MRF::writeLong(uint16_t addr, uint8_t data) {
-  SPI.beginTransaction(spiSettings);
+  this->_spi->beginTransaction(spiSettings);
   digitalWrite(cs, LOW);
-  SPI.transfer(addr >> 3 | 0b10000000);
-  SPI.transfer(addr << 5 | 0b00010000);
-  SPI.transfer(data);
+  this->_spi->transfer(addr >> 3 | 0b10000000);
+  this->_spi->transfer(addr << 5 | 0b00010000);
+  this->_spi->transfer(data);
   digitalWrite(cs, HIGH);
-  SPI.endTransaction();
+  this->_spi->endTransaction();
 }
 
 bool Nanoshield_MRF::writeToBuffer(void* data, int size) {

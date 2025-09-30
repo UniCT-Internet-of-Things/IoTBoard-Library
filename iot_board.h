@@ -9,7 +9,6 @@
 #include "./zigbee/zigbee.h"
 #include "./lora/lora_dev.h"
 #include "./lorawan/lorawan.h"
-#include "./lorawan/packet/LoRaWanPacket.h"
 
 extern Buttons *buttons;
 extern SPIClass *radios_spi;
@@ -17,8 +16,6 @@ extern Display *display;
 extern Zigbee *zigbee;
 extern LoRaClass *lora;
 extern LoRaWANClass *lorawan;
-
-
 
 class IoTBoardClass{
 

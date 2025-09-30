@@ -63,13 +63,33 @@
 
 #define MRF_MAX_RX_FIFO_SIZE (1 + MRF_MHR_SIZE + MRF_MAX_PAYLOAD_SIZE + 2 + 1 + 1)
 
+
+typedef struct _rx_info_t{
+    uint8_t payload_length;
+    int lqi;
+    int rssi;
+    uint16_t src_addr;
+    uint16_t dest_addr;
+    uint16_t panid;
+    uint8_t rx_data[MRF_MAX_PAYLOAD_SIZE]; //max data length = (127 aMaxPHYPacketSize - 2 Frame control - 1 sequence number - 2 panid - 2 shortAddr Destination - 2 shortAddr Source - 2 FCS)
+} __attribute__((packed)) rx_info_t;
+
+/**
+ * Based on the TXSTAT register, but "better"
+ */
+typedef struct _tx_info_t{
+    uint8_t tx_ok:1;
+    uint8_t retries:2;
+    uint8_t channel_busy:1;
+} tx_info_t;
+
 enum Mrf24j40Type { MRF24J40MA, MRF24J40MB, MRF24J40MC, MRF24J40MD, MRF24J40ME };
 
 class Nanoshield_MRF
 {
   public:
 
-    Nanoshield_MRF(Mrf24j40Type type, int cs = A3);
+    Nanoshield_MRF(Mrf24j40Type type, int cs, SPIClass * spi);
     void begin(void);
     void setPanId(uint16_t panId);
     void setAddress(uint16_t addr);
@@ -80,6 +100,8 @@ class Nanoshield_MRF
     int getLinkQuality();
     void sleep();
     void wakeup();
+    void setPromiscuous(boolean enabled);
+
 
     bool write(uint8_t b);
     uint8_t read();
@@ -114,6 +136,7 @@ class Nanoshield_MRF
     uint16_t panId;
     uint16_t srcAddr;
     uint8_t seqNumber;
+    SPIClass * _spi;
     int txCount;
     uint8_t txBuf[MRF_MAX_PAYLOAD_SIZE];
     int rxCount;

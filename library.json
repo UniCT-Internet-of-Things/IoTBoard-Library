@@ -17,7 +17,7 @@
     "license": "MIT",
     "homepage": "https://www.arslab.unict.it",
     "frameworks": "arduino",
-    "platforms": "espressif32@6.9.0",
+    "platforms": "espressif32",
     "dependencies":
     [
        
