@@ -4,7 +4,7 @@
 
 void Buttons::init_buttons(){
     button_1.setup(BTN_1, BUTTON_DEBOUNCE_DELAY, InputDebounce::PIM_INT_PULL_UP_RES);
-    button_2.setup(BTN_1, BUTTON_DEBOUNCE_DELAY, InputDebounce::PIM_INT_PULL_UP_RES);
+    button_2.setup(BTN_2, BUTTON_DEBOUNCE_DELAY, InputDebounce::PIM_INT_PULL_UP_RES);
 }
 
 
