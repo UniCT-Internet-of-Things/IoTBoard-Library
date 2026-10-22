@@ -18,12 +18,10 @@ Add the `lib_deps` in the `platformio.ini` file:
 
 ```ini
 [env:arduino_nano_esp32]
-platform = https://github.com/pioarduino/platform-espressif32/releases/download/stable/platform-espressif32.zip
+platform = espressif32
 board = arduino_nano_esp32
 framework = arduino
 lib_deps = 
-	adafruit/Adafruit GFX Library@^1.11.9
-	adafruit/Adafruit SSD1306@^2.5.7
     https://github.com/UniCT-Internet-of-Things/IoTBoard-Library
 monitor_speed = 115200
 board_build.f_cpu = 240000000L
@@ -33,15 +31,14 @@ board_build.flash_size = 16MB
 build_flags = 
 	-DARDUINO_USB_CDC_ON_BOOT=1
  	-DCONFIG_SPIRAM_CACHE_WORKAROUND
-        -DCORE_DEBUG_LEVEL=1
-        -DBOARD_HAS_PSRAM
+    -DCORE_DEBUG_LEVEL=1
+    -DBOARD_HAS_PSRAM
 	-DCONFIG_SPIRAM_USE=1
-	-mfix-esp32-psram-cache-issue
-        -mfix-esp32-psram-cache-strategy=memw
 	-DLORA_ENABLED
 	-DZIGBEE_ENABLED
 	-DDISPLAY_ENABLED
 	-DLEDS_ENABLED
+	-DESPMESH_ENABLED
 ```
 
 ## How use it
@@ -74,6 +71,21 @@ From this point you can use the UART by using the classic Serial class of Arduin
 void setup(){
     IoTBoard::init_serial();
     Serial.println("Loaded");  
+}
+```
+
+### Run Every
+
+The `runEvery()` function returns `true` once every `interval` milliseconds, without blocking the `loop` like `delay()`. The library provides 8 independent timers, selected by the second parameter (default `0`), so different intervals in the same sketch must use different timers:
+
+```cpp
+void loop(){
+    if(IoTBoard::runEvery(1000)){
+        Serial.println("every second");
+    }
+    if(IoTBoard::runEvery(5000, 1)){
+        Serial.println("every 5 seconds");
+    }
 }
 ```
 
@@ -183,6 +195,128 @@ void loop(){
 ```
 
 From this point, the other external devices can be used.
+
+
+### EspMesh
+
+The IoT Board can be part of an [ESP-WIFI-MESH] network. The nodes organise themselves in a tree: one of them is elected as root and it is the only one connected to the Wi-Fi router, the others reach it through the mesh. To be used, you must add the `-DESPMESH_ENABLED` build flag, call the `init_espmesh()` function with the router credentials and also update the mesh by the main `loop`:
+
+```cpp
+void setup(){
+    IoTBoard::init_espmesh("router-ssid", "router-password");
+}
+
+void loop(){
+    espmesh->update();
+}
+```
+
+All the nodes must run the same firmware, since any of them can be elected as root.
+
+To receive the messages and the status of the mesh you must register a callback function. The callback is called by `espmesh->update()`, so the display, the LEDs and the other devices can be used inside it:
+
+```cpp
+void onMesh(const EspMeshEvent &event){
+    switch(event.type){
+        case EspMeshEventType::Connected:
+            digitalWrite(LED_GREEN, HIGH);
+            break;
+        case EspMeshEventType::Disconnected:
+            digitalWrite(LED_GREEN, LOW);
+            break;
+        case EspMeshEventType::Message:
+            Serial.printf("From " MACSTR ": %s\n", MAC2STR(event.from), (char *) event.data);
+            break;
+        default:
+            break;
+    }
+}
+
+void setup(){
+    IoTBoard::init_serial();
+    IoTBoard::init_leds();
+    IoTBoard::init_espmesh("router-ssid", "router-password", onMesh);
+}
+
+void loop(){
+    espmesh->update();
+}
+```
+
+The available events are:
+
+- `Connected` and `Disconnected`: the node joined or left the mesh
+- `BecameRoot`: the node has been elected as root
+- `GotIP`: the root obtained the IP from the router
+- `ChildJoined` and `ChildLeft`: a node connected to this one or left it (`event.from` is its MAC)
+- `Message`: a message has been received, `event.from` is the MAC of the sender, `event.data` the payload (null terminated) and `event.len` its length
+
+From this point you can access to the `espmesh` pointer to send messages. Each node is identified by its MAC address:
+
+```cpp
+void loop(){
+    espmesh->update();
+
+    if(IoTBoard::runEvery(5000) && espmesh->isConnected()){
+        String s = "Hello from layer " + String(espmesh->getLayer());
+        espmesh->sendToRoot(s.c_str(), s.length());
+    }
+}
+```
+
+The available methods to send messages are:
+
+```cpp
+espmesh->sendToRoot(data, len);                 // to the root
+espmesh->sendTo(mac, data, len);                // to the node with that MAC
+espmesh->broadcast(data, len);                  // to all the nodes
+espmesh->sendToGroup(group, data, len);         // to the nodes that called joinGroup(group)
+espmesh->sendToServer(ip, port, data, len);     // outside the mesh, via the root (UDP)
+```
+
+The group ID is a multicast MAC address, e.g. `01:00:5E:00:00:01`, and a node joins it with `espmesh->joinGroup(group)`. The maximum length of a message is 1472 bytes.
+
+The other methods are `isRoot()`, `isConnected()`, `hasIP()`, `getLayer()`, `getMac(mac)` and `getNodes(nodes, maxNodes)` (on the root it returns the MAC of all the nodes of the mesh).
+
+To change the default values you must use the `EspMeshConfig` structure:
+
+```cpp
+void setup(){
+    EspMeshConfig config;
+    config.router_ssid = "router-ssid";
+    config.router_pass = "router-password";
+    config.mesh_id[5] = 0x01;                   // default 77:77:77:77:77:77
+    config.mesh_pass = "my-mesh-password";      // default "iot-lab-board-pass"
+    config.max_layer = 4;                       // default 6
+    config.max_children = 4;                    // default 6
+    config.role = EspMeshRole::Auto;            // Auto (election), Root or Node
+    config.on_event = onMesh;
+
+    IoTBoard::init_espmesh(config);
+}
+```
+
+The root can also forward the messages outside the mesh. By setting `forward_ip` and `forward_port`, the root sends to that server via UDP every message it receives, also the ones sent by itself with `sendToRoot()`, in this way the messages reach the server even after a new root is elected:
+
+```cpp
+void setup(){
+    EspMeshConfig config;
+    config.router_ssid = "router-ssid";
+    config.router_pass = "router-password";
+    config.forward_ip = IPAddress(192, 168, 1, 10);
+    config.forward_port = 5000;
+
+    IoTBoard::init_espmesh(config);
+}
+```
+
+To receive the messages on the PC you can use netcat (`-k` is required to accept messages from a new root):
+
+```bash
+nc -kul 5000
+```
+
+The mesh uses the Wi-Fi interface of the board, so it can not be used together with the `WiFi` class (`WiFi.begin()`). Once the root has the IP, the libraries based on sockets (`WiFiClient`, `HTTPClient`, MQTT) can be used on the root.
 
 ### Zigbee
 
@@ -350,3 +484,4 @@ void loop()
     delay(1);
 }
 ```
+

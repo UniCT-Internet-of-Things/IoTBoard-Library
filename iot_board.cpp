@@ -6,6 +6,9 @@ Display *display;
 Zigbee *zigbee;
 LoRaClass *lora;
 LoRaWANClass *lorawan = &_instance_lorawan;
+#ifdef ESPMESH_ENABLED
+EspMesh *espmesh;
+#endif
 
 IoTBoardClass * IoTBoardClass::_instance = nullptr;
 
@@ -167,3 +170,48 @@ bool IoTBoardClass::init_lorawan(){
     Serial.println("[OK]\tLoRaWAN Initialised");
     return true;
 }
+
+
+bool IoTBoardClass::run_every(unsigned long interval, uint8_t timer){
+    if(timer >= IOTBOARD_TIMERS){
+        return false;
+    }
+    unsigned long now = millis();
+    if(now - timers[timer] >= interval){
+        timers[timer] = now;
+        return true;
+    }
+    return false;
+}
+
+
+#ifdef ESPMESH_ENABLED
+bool IoTBoardClass::init_espmesh(const EspMeshConfig &config){
+    if(isEspMeshActivated){
+        Serial.println("[ERROR][EspMesh] Already initialised");
+        return false;
+    }
+
+    if(config.router_ssid == nullptr){
+        Serial.println("[ERROR][EspMesh] You must set the router SSID");
+        return false;
+    }
+
+    espmesh = new EspMesh();
+    if(!espmesh->begin(config)){
+        Serial.println("[ERROR][EspMesh] Can not initialise the mesh network");
+        return false;
+    }
+    isEspMeshActivated = true;
+    Serial.println("[OK]\tEspMesh Initialised");
+    return true;
+}
+
+bool IoTBoardClass::init_espmesh(const char *router_ssid, const char *router_pass, espmesh_event_cb callback){
+    EspMeshConfig config;
+    config.router_ssid = router_ssid;
+    config.router_pass = router_pass;
+    config.on_event = callback;
+    return init_espmesh(config);
+}
+#endif

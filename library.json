@@ -1,6 +1,6 @@
 {
     "name": "IoT Board Library",
-    "version": "0.9.6",
+    "version": "0.10.0",
     "description": "ARSLab IoT Board library",
     "repository":
     {
@@ -20,6 +20,15 @@
     "platforms": "espressif32",
     "dependencies":
     [
-       
+      {
+        "owner": "adafruit",
+        "name": "Adafruit GFX Library",
+        "version": "^1.11.9"
+      },
+      {
+        "owner": "adafruit",
+        "name": "Adafruit SSD1306",
+        "version": "^2.5.7"
+      }
     ]
   }

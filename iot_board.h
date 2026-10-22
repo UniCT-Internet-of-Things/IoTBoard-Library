@@ -9,6 +9,9 @@
 #include "./zigbee/zigbee.h"
 #include "./lora/lora_dev.h"
 #include "./lorawan/lorawan.h"
+#include "./espmesh/espmesh.h"
+
+#define IOTBOARD_TIMERS 8
 
 extern Buttons *buttons;
 extern SPIClass *radios_spi;
@@ -16,6 +19,9 @@ extern Display *display;
 extern Zigbee *zigbee;
 extern LoRaClass *lora;
 extern LoRaWANClass *lorawan;
+#ifdef ESPMESH_ENABLED
+extern EspMesh *espmesh;
+#endif
 
 class IoTBoardClass{
 
@@ -30,6 +36,12 @@ class IoTBoardClass{
         bool init_zigbee();
         bool init_lora();
         bool init_lorawan();
+#ifdef ESPMESH_ENABLED
+        bool init_espmesh(const EspMeshConfig &config);
+        bool init_espmesh(const char *router_ssid, const char *router_pass, espmesh_event_cb callback=nullptr);
+#endif
+
+        bool run_every(unsigned long interval, uint8_t timer=0);
         
         static IoTBoardClass* get_instance(){
             if(_instance == nullptr){
@@ -45,6 +57,8 @@ class IoTBoardClass{
         bool isZigbeeActivated = false;
         bool isLoRaActivated = false;
         bool isLoRaWANActivated = false;
+        bool isEspMeshActivated = false;
+        unsigned long timers[IOTBOARD_TIMERS] = {0};
 };
 
 namespace IoTBoard{
@@ -58,6 +72,12 @@ namespace IoTBoard{
     inline bool init_zigbee(){ return IoTBoardClass::get_instance()->init_zigbee();};
     inline bool init_lora(){ return IoTBoardClass::get_instance()->init_lora();};
     inline bool init_lorawan(){ return IoTBoardClass::get_instance()->init_lorawan();};
+#ifdef ESPMESH_ENABLED
+    inline bool init_espmesh(const EspMeshConfig &config){ return IoTBoardClass::get_instance()->init_espmesh(config);};
+    inline bool init_espmesh(const char *router_ssid, const char *router_pass, espmesh_event_cb callback=nullptr){ return IoTBoardClass::get_instance()->init_espmesh(router_ssid, router_pass, callback);};
+#endif
+
+    inline bool runEvery(unsigned long interval, uint8_t timer=0){ return IoTBoardClass::get_instance()->run_every(interval, timer);};
 }
 
 
