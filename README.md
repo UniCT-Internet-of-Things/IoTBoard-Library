@@ -18,7 +18,7 @@ Add the `lib_deps` in the `platformio.ini` file:
 
 ```ini
 [env:arduino_nano_esp32]
-platform = espressif32
+platform = https://github.com/pioarduino/platform-espressif32/releases/download/55.03.312-1/platform-espressif32.zip
 board = arduino_nano_esp32
 framework = arduino
 lib_deps = 
@@ -309,6 +309,8 @@ void setup(){
     IoTBoard::init_espmesh(config);
 }
 ```
+
+The IP address can also be written as a string, both in the configuration (`config.forward_ip = "192.168.1.10";`) and in `espmesh->sendToServer("192.168.1.10", 5000, data, len)`.
 
 To receive the messages on the PC you can use netcat (`-k` is required to accept messages from a new root):
 

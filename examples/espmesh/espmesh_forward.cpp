@@ -4,7 +4,7 @@
 const char *ssid = "ARSLab-IoT_2G";
 const char *password = "arslabiot";
 
-IPAddress server(192, 168, 1, 5);
+IPAddress server = IPAddress("192.168.1.5");
 uint16_t port = 5000;
 
 int count_sent = 0;
