@@ -120,6 +120,10 @@ void EspMesh::getMac(uint8_t mac[6]){
     esp_wifi_get_mac(WIFI_IF_STA, mac);
 }
 
+int EspMesh::getNodeCount() const {
+    return esp_mesh_get_routing_table_size();
+}
+
 int EspMesh::getNodes(uint8_t nodes[][6], int maxNodes){
     int size = 0;
     if(esp_mesh_get_routing_table((mesh_addr_t *) nodes, maxNodes * 6, &size) != ESP_OK){

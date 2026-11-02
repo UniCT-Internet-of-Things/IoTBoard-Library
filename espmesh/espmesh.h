@@ -68,6 +68,7 @@ class EspMesh{
         bool hasIP();
         int getLayer();
         void getMac(uint8_t mac[6]);
+        int getNodeCount() const;
         int getNodes(uint8_t nodes[][6], int maxNodes);
 
         bool sendToRoot(const void *data, size_t len);
