@@ -4,8 +4,9 @@
 #include <lwip/sockets.h>
 
 
-static const uint8_t BROADCAST_ADDR[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
-
+static const mesh_addr_t BROADCAST_ADDR = {
+    .addr = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+};
 
 bool EspMesh::begin(const EspMeshConfig &cfg){
     config = cfg;
@@ -100,33 +101,39 @@ void EspMesh::onEvent(espmesh_event_cb callback){
 }
 
 
-bool EspMesh::isRoot(){
+bool EspMesh::isRoot() const {
     return esp_mesh_is_root();
 }
 
-bool EspMesh::isConnected(){
+bool EspMesh::isConnected() const {
     return connected;
 }
 
-bool EspMesh::hasIP(){
+bool EspMesh::hasIP() const {
     return gotIP;
 }
 
-int EspMesh::getLayer(){
+int EspMesh::getLayer() const {
     return esp_mesh_get_layer();
 }
 
-void EspMesh::getMac(uint8_t mac[6]){
-    esp_wifi_get_mac(WIFI_IF_STA, mac);
+void EspMesh::getMac(mesh_addr_t *mac) const {
+    esp_wifi_get_mac(WIFI_IF_STA, mac->addr);
+}
+
+mesh_addr_t EspMesh::getMac() const {
+    mesh_addr_t result;
+    getMac(&result);
+    return result;
 }
 
 int EspMesh::getNodeCount() const {
     return esp_mesh_get_routing_table_size();
 }
 
-int EspMesh::getNodes(uint8_t nodes[][6], int maxNodes){
+int EspMesh::getNodes(mesh_addr_t nodes[], int maxNodes) const {
     int size = 0;
-    if(esp_mesh_get_routing_table((mesh_addr_t *) nodes, maxNodes * 6, &size) != ESP_OK){
+    if(esp_mesh_get_routing_table(nodes, maxNodes * 6, &size) != ESP_OK ){
         return 0;
     }
     return size;
@@ -135,9 +142,8 @@ int EspMesh::getNodes(uint8_t nodes[][6], int maxNodes){
 
 bool EspMesh::sendToRoot(const void *data, size_t len){
     if(esp_mesh_is_root()){
-        uint8_t mac[6];
-        getMac(mac);
-        pushEvent(EspMeshEventType::Message, mac, (const uint8_t *) data, len);
+        mesh_addr_t addr = getMac();
+        pushEvent(EspMeshEventType::Message, addr.addr, (const uint8_t *) data, len);
         if(config.forward_port != 0){
             return forward((uint32_t) config.forward_ip, config.forward_port, data, len);
         }
@@ -146,20 +152,17 @@ bool EspMesh::sendToRoot(const void *data, size_t len){
     return send(NULL, 0, data, len);
 }
 
-bool EspMesh::sendTo(const uint8_t mac[6], const void *data, size_t len){
-    mesh_addr_t to;
-    memcpy(to.addr, mac, 6);
-    return send(&to, MESH_DATA_P2P, data, len);
+bool EspMesh::sendTo(const mesh_addr_t *node, const void *data, size_t len){
+
+    return send(node, MESH_DATA_P2P, data, len);
 }
 
 bool EspMesh::broadcast(const void *data, size_t len){
-    return sendTo(BROADCAST_ADDR, data, len);
+    return sendTo(&BROADCAST_ADDR, data, len);
 }
 
-bool EspMesh::sendToGroup(const uint8_t group[6], const void *data, size_t len){
-    mesh_addr_t to;
-    memcpy(to.addr, group, 6);
-    return send(&to, MESH_DATA_GROUP, data, len);
+bool EspMesh::sendToGroup(const mesh_addr_t *group, const void *data, size_t len){
+    return send(group, MESH_DATA_GROUP, data, len);
 }
 
 bool EspMesh::sendToServer(IPAddress ip, uint16_t port, const void *data, size_t len){
@@ -173,16 +176,12 @@ bool EspMesh::sendToServer(IPAddress ip, uint16_t port, const void *data, size_t
 }
 
 
-bool EspMesh::joinGroup(const uint8_t group[6]){
-    mesh_addr_t addr;
-    memcpy(addr.addr, group, 6);
-    return esp_mesh_set_group_id(&addr, 1) == ESP_OK;
+bool EspMesh::joinGroup(const mesh_addr_t *addr){
+    return esp_mesh_set_group_id(addr, 1) == ESP_OK;
 }
 
-bool EspMesh::leaveGroup(const uint8_t group[6]){
-    mesh_addr_t addr;
-    memcpy(addr.addr, group, 6);
-    return esp_mesh_delete_group_id(&addr, 1) == ESP_OK;
+bool EspMesh::leaveGroup(const mesh_addr_t *addr){
+    return esp_mesh_delete_group_id(addr, 1) == ESP_OK;
 }
 
 

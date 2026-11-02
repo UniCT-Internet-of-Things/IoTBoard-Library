@@ -63,22 +63,23 @@ class EspMesh{
         void update();
         void onEvent(espmesh_event_cb callback);
 
-        bool isRoot();
-        bool isConnected();
-        bool hasIP();
-        int getLayer();
-        void getMac(uint8_t mac[6]);
+        bool isRoot() const;
+        bool isConnected() const;
+        bool hasIP() const;
+        int getLayer() const;
+        void getMac(mesh_addr_t *mac) const;
+        mesh_addr_t getMac() const;
         int getNodeCount() const;
-        int getNodes(uint8_t nodes[][6], int maxNodes);
+        int getNodes(mesh_addr_t nodes[], int maxNodes) const;
 
         bool sendToRoot(const void *data, size_t len);
-        bool sendTo(const uint8_t mac[6], const void *data, size_t len);
+        bool sendTo(const mesh_addr_t *node, const void *data, size_t len);
         bool broadcast(const void *data, size_t len);
-        bool sendToGroup(const uint8_t group[6], const void *data, size_t len);
+        bool sendToGroup(const mesh_addr_t *group, const void *data, size_t len);
         bool sendToServer(IPAddress ip, uint16_t port, const void *data, size_t len);
 
-        bool joinGroup(const uint8_t group[6]);
-        bool leaveGroup(const uint8_t group[6]);
+        bool joinGroup(const mesh_addr_t *group);
+        bool leaveGroup(const mesh_addr_t *group);
 
     private:
         static void meshEventHandler(void *arg, esp_event_base_t base, int32_t id, void *data);
