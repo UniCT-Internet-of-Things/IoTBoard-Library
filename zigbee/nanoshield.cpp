@@ -129,6 +129,9 @@ int Nanoshield_MRF::getLinkQuality() {
 void Nanoshield_MRF::sleep() {
   // Disable PA and LNA
   switch (type) {
+    case MRF24J40MA:
+      // Can't put to sleep
+      break;
     case MRF24J40MB:
       // GPIO1 and GPIO2 are connected
       writeLong(MRF_TESTMODE, 0b00001000);  // Configure RF state machine for normal operation
