@@ -10,14 +10,6 @@ int count_sent = 0;
 volatile bool sent = false;
 const char* str;
 volatile bool packetReceived = false;
-volatile bool canReceive = false;
-
-void onZigbeeReceive(){
-    
-    if(sent){
-        canReceive = true;
-    }
-}
 
 void onZigbeeTransfer(){
     count_sent = count_sent +1;
@@ -49,7 +41,7 @@ void setup() {
     zigbee->setPanId(0x8888);
     zigbee->setChannel(12);
 
-    attachInterrupt(ZIGBEE_INT, onZigbeeReceive, FALLING);
+    // ZIGBEE_INT (A3) is used by the library: do not attach other interrupts to it
     
     display->printf("Zigbee enabled (%04X)\n", zigbee->getAddress());
     display->display();
@@ -126,12 +118,11 @@ void devicesTask(void *pvParameters){
 void networkTask(void *pvParameters){
     for(;;){
         if(!sent){
-            canReceive = false;
             String s = "Ciao "+String(count_sent);
             zigbee->startPacket();
             zigbee->writeString((char *)s.c_str());
             zigbee->sendPacket(0xffff, false);
-            while(!zigbee->transmissionSuccess()){
+            while(!zigbee->transmissionDone()){
                 delay(10);
             }
             onZigbeeTransfer();
@@ -140,7 +131,7 @@ void networkTask(void *pvParameters){
         
             delay(500);
         } 
-        if(canReceive && zigbee->receivePacket()){
+        if(sent && zigbee->receivePacket()){
             str = zigbee->readString();
             count++;
             sent = false;
