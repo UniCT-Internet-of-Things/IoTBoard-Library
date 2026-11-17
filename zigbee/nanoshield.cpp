@@ -5,6 +5,8 @@
  *
  * Copyright (c) 2015 Circuitar
  * This software is released under the MIT license. See the attached LICENSE file for details.
+ *
+ * IoT Board version: interrupt driven, see "Driver model" in nanoshield.h.
 */
 #include "nanoshield.h"
 
@@ -41,15 +43,30 @@
 #define MRF_SLPCON0  0x211
 #define MRF_SLPCON1  0x220
 #define MRF_TESTMODE 0x22F
+#define MRF_RXFIFO   0x300
+
+#define MRF_INTSTAT_TXNIF 0b00000001
+#define MRF_INTSTAT_RXIF  0b00001000
+#define MRF_TXSTAT_TXNSTAT 0b00000001
+#define MRF_TXSTAT_CCAFAIL 0b00100000
+
+#define MRF_TASK_STACK    4096
+#define MRF_TASK_PRIORITY 3
+#define MRF_CB_TASK_STACK 8192    // the user callback runs here: room for printf, display...
+#define MRF_CB_TASK_PRIORITY 2    // below the radio task, above loop() (priority 1)
+#define MRF_TX_WAIT_MS    100     // longest wait for the previous TX in sendPacket()
 
 SPISettings Nanoshield_MRF::spiSettings = SPISettings(8000000, MSBFIRST, SPI_MODE0);
+Nanoshield_MRF* Nanoshield_MRF::instance = nullptr;
 
-
-Nanoshield_MRF::Nanoshield_MRF(Mrf24j40Type type, int cs, SPIClass * spi) {
+Nanoshield_MRF::Nanoshield_MRF(Mrf24j40Type type, int cs, SPIClass * spi, int intPin) {
   this->cs = cs;
+  this->intPin = intPin;
   this->type = type;
   this->panId = 0;
   this->srcAddr = 1;
+  this->channel = 11;
+  this->promiscuous = false;
   this->seqNumber = 0;
   this->txCount = 0;
   this->rxSize = 0;
@@ -57,30 +74,244 @@ Nanoshield_MRF::Nanoshield_MRF(Mrf24j40Type type, int cs, SPIClass * spi) {
   this->rssi = 0;
   this->lqi = 0;
   this->_spi = spi;
+  this->lock = nullptr;
+  this->task = nullptr;
+  this->txBusy = false;
+  this->txStatus = 0;
+  this->rxHead = 0;
+  this->rxTail = 0;
+  this->rxQueued = 0;
+  this->rxDropped = 0;
+  this->rxCallback = nullptr;
+  this->callbackTask = nullptr;
+  memset(&current, 0, sizeof(current));
+  this->rxBuf = current.rx_data;
 }
 
-void Nanoshield_MRF::begin() {
+bool Nanoshield_MRF::begin() {
   pinMode(cs, OUTPUT);
   digitalWrite(cs, HIGH);
-  //this->_spi->begin();
+  if (lock == nullptr) {
+    lock = xSemaphoreCreateRecursiveMutex();
+  }
+  // The radio RESET pin is not wired and the module stays powered across ESP32 resets: clear
+  // whatever the previous sketch left (sleep, coordinator or no-ACK mode, pending frames).
+  reset();
+  delay(2);
   init();
+
+  if (intPin < 0 || !intPinDriven()) {
+    return false;
+  }
+
+  instance = this;
+  pinMode(intPin, INPUT_PULLUP);
+  if (task == nullptr) {
+#ifdef ARDUINO_RUNNING_CORE
+    xTaskCreatePinnedToCore(serviceTask, "mrf24j40", MRF_TASK_STACK, this, MRF_TASK_PRIORITY, &task, ARDUINO_RUNNING_CORE);
+#else
+    xTaskCreate(serviceTask, "mrf24j40", MRF_TASK_STACK, this, MRF_TASK_PRIORITY, &task);
+#endif
+  }
+  attachInterrupt(intPin, onInterrupt, FALLING);
+  xTaskNotifyGive(task);                 // first pass: handle anything already pending
+  return true;
+}
+
+// The radio drives INT (high when idle, low while an interrupt is pending): with the pin
+// connected the level does not depend on the pull resistor, with the pin floating it does.
+bool Nanoshield_MRF::intPinDriven() {
+  pinMode(intPin, INPUT_PULLDOWN);
+  delay(2);
+  int pd = digitalRead(intPin);
+  pinMode(intPin, INPUT_PULLUP);
+  delay(2);
+  int pu = digitalRead(intPin);
+  return pd == pu;
+}
+
+void IRAM_ATTR Nanoshield_MRF::onInterrupt() {
+  BaseType_t woken = pdFALSE;
+  if (instance && instance->task) {
+    vTaskNotifyGiveFromISR(instance->task, &woken);
+  }
+  if (woken) {
+    portYIELD_FROM_ISR();
+  }
+}
+
+void Nanoshield_MRF::serviceTask(void* arg) {
+  Nanoshield_MRF* mrf = (Nanoshield_MRF*)arg;
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    // INT stays low until INTSTAT is read: if it is still low, an event arrived meanwhile
+    do {
+      mrf->service();
+    } while (digitalRead(mrf->intPin) == LOW);
+  }
+}
+
+void Nanoshield_MRF::service() {
+  take();
+  uint8_t flags = readShort(MRF_INTSTAT);    // the only place where INTSTAT is read
+  if (flags & MRF_INTSTAT_TXNIF) {
+    txStatus = readShort(MRF_TXSTAT);
+    txBusy = false;
+  }
+  if (flags & MRF_INTSTAT_RXIF) {
+    readRxFifo();
+  }
+  give();
+}
+
+// Copies the frame from the RX FIFO into the queue and parses the MAC header.
+// Called with the lock held.
+void Nanoshield_MRF::readRxFifo() {
+  uint8_t frame[MRF_MAX_PSDU_SIZE];
+
+  writeShort(MRF_BBREG1, 0b00000100);        // RXDECINV = 1: no reception while reading
+  int len = readLong(MRF_RXFIFO);            // PSDU length, FCS included
+  bool valid = len >= 5 && len <= MRF_MAX_PSDU_SIZE;
+  uint8_t fifoLqi = 0, fifoRssi = 0;
+  if (valid) {
+    for (int i = 0; i < len; i++) {
+      frame[i] = readLong(MRF_RXFIFO + 1 + i);
+    }
+    fifoLqi = readLong(MRF_RXFIFO + 1 + len);
+    fifoRssi = readLong(MRF_RXFIFO + 1 + len + 1);
+  }
+  writeShort(MRF_RXFLUSH, 0b00000001);
+  writeShort(MRF_BBREG1, 0);                 // RXDECINV = 0: receive again
+  if (!valid) {
+    return;
+  }
+
+  // MAC header: frame control, sequence number, addressing fields
+  uint16_t fcf = frame[0] | frame[1] << 8;
+  uint8_t frameType = fcf & 0b111;
+  int dstMode = (fcf >> 10) & 0b11;
+  int srcMode = (fcf >> 14) & 0b11;
+  bool panCompression = fcf & 0b01000000;
+  if (frameType != MRF_FRAME_DATA && !promiscuous) {
+    return;
+  }
+
+  rx_info_t info;
+  info.frame_type = frameType;
+  info.seq = frame[2];
+  info.panid = 0xFFFF;
+  info.dest_addr = 0xFFFE;
+  info.src_addr = 0xFFFE;
+  int pos = 3;
+  if (dstMode) {
+    info.panid = frame[pos] | frame[pos + 1] << 8;
+    pos += 2;
+    if (dstMode == 2) info.dest_addr = frame[pos] | frame[pos + 1] << 8;
+    pos += dstMode == 2 ? 2 : 8;
+  }
+  if (srcMode) {
+    if (!(panCompression && dstMode)) {
+      if (!dstMode) info.panid = frame[pos] | frame[pos + 1] << 8;
+      pos += 2;
+    }
+    if (srcMode == 2) info.src_addr = frame[pos] | frame[pos + 1] << 8;
+    pos += srcMode == 2 ? 2 : 8;
+  }
+  int payloadLen = len - MRF_MFR_SIZE - pos;
+  if (payloadLen < 0) {
+    return;
+  }
+  info.payload_length = payloadLen;
+  memcpy(info.rx_data, &frame[pos], payloadLen);
+  info.rx_data[payloadLen] = 0;              // readString() stays inside the buffer
+  info.lqi = fifoLqi;
+  info.rssi_raw = fifoRssi;
+  info.rssi = (int)lroundf(fifoRssi * 0.197948f - 87.646977f);
+
+  if (rxQueued == MRF_RX_QUEUE_SIZE) {       // full: drop the oldest frame
+    rxTail = (rxTail + 1) % MRF_RX_QUEUE_SIZE;
+    rxQueued--;
+    rxDropped++;
+  }
+  rxQueue[rxHead] = info;
+  rxHead = (rxHead + 1) % MRF_RX_QUEUE_SIZE;
+  rxQueued++;
+  if (rxCallback && callbackTask) {
+    xTaskNotifyGive(callbackTask);
+  }
+}
+
+void Nanoshield_MRF::onReceiveCallback(ZigbeeReceiveCallback callback) {
+  take();
+  rxCallback = callback;
+  if (rxCallback && callbackTask == nullptr) {
+#ifdef ARDUINO_RUNNING_CORE
+    xTaskCreatePinnedToCore(callbackTaskLoop, "mrf24j40_rx", MRF_CB_TASK_STACK, this, MRF_CB_TASK_PRIORITY, &callbackTask, ARDUINO_RUNNING_CORE);
+#else
+    xTaskCreate(callbackTaskLoop, "mrf24j40_rx", MRF_CB_TASK_STACK, this, MRF_CB_TASK_PRIORITY, &callbackTask);
+#endif
+  }
+  give();
+  if (rxCallback && callbackTask) {
+    xTaskNotifyGive(callbackTask);           // frames already in the queue
+  }
+}
+
+// Takes the frames from the queue and hands them to the user callback. receivePacket() sets the
+// current frame, so inside the callback read*() and readString() work as usual.
+void Nanoshield_MRF::callbackTaskLoop(void* arg) {
+  Nanoshield_MRF* mrf = (Nanoshield_MRF*)arg;
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    for (;;) {
+      mrf->take();
+      ZigbeeReceiveCallback cb = mrf->rxCallback;
+      mrf->give();
+      if (!cb || !mrf->receivePacket()) {
+        break;
+      }
+      cb(&mrf->current);
+    }
+  }
+}
+
+void Nanoshield_MRF::take() {
+  if (lock) xSemaphoreTakeRecursive(lock, portMAX_DELAY);
+}
+
+void Nanoshield_MRF::give() {
+  if (lock) xSemaphoreGiveRecursive(lock);
 }
 
 void Nanoshield_MRF::setPanId(uint16_t panId) {
+  take();
   this->panId = panId;
   writeShort(MRF_PANIDH, panId >> 8);
   writeShort(MRF_PANIDL, panId);
+  give();
 }
 
 void Nanoshield_MRF::setAddress(uint16_t addr) {
+  take();
   this->srcAddr = addr;
   writeShort(MRF_SADRH, addr >> 8);
   writeShort(MRF_SADRL, addr);
+  give();
+}
+
+uint16_t Nanoshield_MRF::getPanId() {
+  return panId;
+}
+
+uint16_t Nanoshield_MRF::getAddress() {
+  return srcAddr;
 }
 
 void Nanoshield_MRF::setCoordinator(bool coord) {
+  take();
   uint8_t reg = readShort(MRF_RXMCR);
   writeShort(MRF_RXMCR, coord ? reg | 0b00001100 : reg & ~0b00001100);
+  give();
 }
 
 void Nanoshield_MRF::setChannel(int channel) {
@@ -88,16 +319,24 @@ void Nanoshield_MRF::setChannel(int channel) {
     return;
   }
 
+  take();
+  this->channel = channel;
   // Change channel
   writeLong(MRF_RFCON0, (channel - 11) << 4 | 0x03);
-  
+
   // Perform RF state machine reset and wait for RF circuitry to calibrate
   writeShort(MRF_RFCTL, 0b00000100);
   writeShort(MRF_RFCTL, 0);
   delayMicroseconds(200);
+  give();
+}
+
+int Nanoshield_MRF::getChannel() {
+  return channel;
 }
 
 float Nanoshield_MRF::measureSignalStrength() {
+  take();
   // Disable PA
   if (type != MRF24J40MA) {
     writeLong(MRF_TESTMODE, 0b00001000);  // Configure RF state machine for normal operation
@@ -107,13 +346,14 @@ float Nanoshield_MRF::measureSignalStrength() {
 
   // Initiate RSSI calculation (RSSIMODE1 = 1)
   writeShort(MRF_BBREG6, 0b11000000);
-  
+
   // Wait until conversion is ready and read RSSI
   while (!(readShort(MRF_BBREG6) & 0b00000001));
   rssi = readLong(MRF_RSSI);
 
   // Re-enable PA
   enablePaLna();
+  give();
 
   return getSignalStrength();
 }
@@ -127,6 +367,7 @@ int Nanoshield_MRF::getLinkQuality() {
 }
 
 void Nanoshield_MRF::sleep() {
+  take();
   // Disable PA and LNA
   switch (type) {
     case MRF24J40MB:
@@ -148,16 +389,26 @@ void Nanoshield_MRF::sleep() {
       writeShort(MRF_TRISGPIO, 0b00000111); // Configure GPIO0, GPIO1 and GPIO2 for output
       writeShort(MRF_GPIO, 0);              // Set GPIO1 and GPIO2 to 0 to disable PA and LNA
       break;
+    default:
+      break;
   }
 
   writeShort(MRF_SOFTRST, 0b00000100); // Perform Power Management Reset (RSTPWR = 1)
   writeShort(MRF_WAKECON, 0b10000000); // Enable Immediate Wake-up Mode (IMMWAKE = 1)
   writeShort(MRF_SLPACK, 0b10000000);  // Put the module to sleep (SLPACK = 1)
+  give();
 }
 
 void Nanoshield_MRF::wakeup() {
+  take();
   reset(); // Perform software reset
   init();  // Reinitialize all registers
+  // the reset clears address, channel and receive mode: restore them
+  setAddress(srcAddr);
+  setChannel(channel);
+  setPromiscuous(promiscuous);
+  txBusy = false;
+  give();
 }
 
 bool Nanoshield_MRF::write(uint8_t b) {
@@ -238,7 +489,7 @@ int Nanoshield_MRF::writeString(char* str) {
   }
 
   int size = strlen(str);
-  
+
   if (size > bytesLeftToWrite() - 1) {
     size = bytesLeftToWrite() - 1;
   }
@@ -248,17 +499,23 @@ int Nanoshield_MRF::writeString(char* str) {
   return size + 1;
 }
 
+// Without a destination buffer it returns a pointer into the received frame (valid until the
+// next receivePacket()) and moves past the string, so further read*() calls work.
 const char* Nanoshield_MRF::readString(char* str, int size) {
   char* result = (char*)&rxBuf[rxCount];
 
   if (str == NULL) {
+    rxCount += strnlen(result, bytesLeftToRead());
+    if (rxCount < rxSize) {
+      rxCount++;                              // skip the '\0'
+    }
     return result;
   }
 
   if (size > bytesLeftToRead()) {
     size = bytesLeftToRead();
   }
-  
+
   if (size == 0) {
     return 0;
   }
@@ -282,6 +539,13 @@ bool Nanoshield_MRF::sendPacket(uint16_t addr, bool ack) {
     return false;
   }
 
+  // The TX FIFO must not be rewritten while the radio is still sending it
+  unsigned long start = millis();
+  while (txBusy && millis() - start < MRF_TX_WAIT_MS) {
+    delay(1);
+  }
+
+  take();
   // Send header size, frame size and header
   int i = 0;
   writeLong(i++, MRF_MHR_SIZE);                  // Header size
@@ -301,58 +565,81 @@ bool Nanoshield_MRF::sendPacket(uint16_t addr, bool ack) {
     writeLong(i++, txBuf[j]);
   }
 
-  // Start transmission (0x37 0x01)
+  // Start transmission (0x37 0x01); the TXNIF interrupt tells when it ends
+  txBusy = true;
   writeShort(MRF_TXNCON, ack ? 0b00000101 : 0b00000001);
-  
+  give();
+
   return true;
 }
 
 bool Nanoshield_MRF::transmissionDone() {
-  return readShort(MRF_INTSTAT) & 0b00000001;
+  return !txBusy;
 }
 
 bool Nanoshield_MRF::transmissionSuccess() {
-  return !(readShort(MRF_TXSTAT) & 0b00000001);
+  return !txBusy && !(txStatus & MRF_TXSTAT_TXNSTAT);
+}
+
+int Nanoshield_MRF::getRetries() {
+  return (txStatus >> 6) & 0b11;
+}
+
+tx_info_t Nanoshield_MRF::getTXInfo() {
+  tx_info_t info;
+  info.tx_ok = transmissionSuccess();
+  info.retries = getRetries();
+  info.channel_busy = (txStatus & MRF_TXSTAT_CCAFAIL) != 0;
+  return info;
 }
 
 bool Nanoshield_MRF::receivePacket() {
-  int frameSize;
-
-  // Check RXIF in INTSTAT
-  if (readShort(MRF_INTSTAT) & 0b00001000) {
-    // Disable receiver
-    writeShort(MRF_BBREG1, 0b00000100);
-    
-    // Packet received, get the number of bytes
-    frameSize = readLong(0x300);
-    
-    // Copy the message bytes into the user buffer
-    rxSize = 0;
-    rxCount = 0;
-    while (rxSize < (frameSize - MRF_MHR_SIZE - MRF_MFR_SIZE)) {
-      rxBuf[rxSize] = readLong(0x301 + MRF_MHR_SIZE + rxSize);
-      rxSize++;
-    }
-    
-    // Read RSSI and LQI
-    lqi = readLong(0x301 + frameSize);
-    rssi = readLong(0x301 + frameSize + 1);
-  
-    // Flush the reception buffer, re-enable receiver
-    writeShort(MRF_RXFLUSH, 0b00000001);
-    writeShort(MRF_BBREG1, 0);
-    
-    // Wait until RXIF is cleared (takes a while)
-    while(readShort(MRF_INTSTAT) & 0b00001000);
-    
-    return true;
+  take();
+  if (rxQueued == 0) {
+    give();
+    return false;
   }
-  
-  return false;
+  current = rxQueue[rxTail];
+  rxTail = (rxTail + 1) % MRF_RX_QUEUE_SIZE;
+  rxQueued--;
+  give();
+
+  rxBuf = current.rx_data;
+  rxSize = current.payload_length;
+  rxCount = 0;
+  lqi = current.lqi;
+  rssi = current.rssi_raw;
+  return true;
 }
 
 int Nanoshield_MRF::bytesLeftToRead() {
   return rxSize - rxCount;
+}
+
+int Nanoshield_MRF::packetsAvailable() {
+  take();
+  int n = rxQueued;
+  give();
+  return n;
+}
+
+uint32_t Nanoshield_MRF::droppedPackets() {
+  take();
+  uint32_t n = rxDropped;
+  give();
+  return n;
+}
+
+rx_info_t* Nanoshield_MRF::getRXPacket() {
+  return &current;
+}
+
+uint16_t Nanoshield_MRF::getSourceAddress() {
+  return current.src_addr;
+}
+
+uint16_t Nanoshield_MRF::getDestinationAddress() {
+  return current.dest_addr;
 }
 
 void Nanoshield_MRF::reset() {
@@ -370,16 +657,17 @@ void Nanoshield_MRF::init() {
                                          //  (TXFIL = 1, 20MRECVR = 1)
   writeLong(MRF_RFCON7, 0b10000000);     // Use 100kHz internal oscillator for Sleep Clock (SLPCLKSEL = 0x2)
   writeLong(MRF_RFCON8, 0b00010000);     // Set recommended value for VCO Control (RFVCO = 1)
-  writeLong(MRF_SLPCON0, 0b00000001);    // Disable the sleep clock to save power (/SLPCLKEN = 1)
+  writeLong(MRF_SLPCON0, 0b00000001);    // Disable the sleep clock to save power (/SLPCLKEN = 1),
+                                         //  INT active on the falling edge (INTEDGE = 0)
   writeLong(MRF_SLPCON1, 0b00100001);    // Disable CLKOUT pin and set Sleep Clock Divisor to minimum of 0x01 for the
                                          //  100kHz internal oscillator (/CLOUKTEN = 1, SLPCLKDIV = 0x01)
   writeShort(MRF_BBREG2, 0b10111000);    // Use CCA Mode 1 - Energy above threshold - and set CCA Carrier Sense
                                          //  Threshold to recommended value (CCAMODE = 0x2, CCACSTH = 0xE)
   writeShort(MRF_CCAEDTH, 0b01100000);   // Set energy detection threshold to recommended value (CCAEDTH = 0x60)
   writeShort(MRF_BBREG6, 0b01000000);    // Calculate RSSI for each packet received (RSSIMODE2 = 1)
-  writeShort(MRF_INTCON, 0b11110111);    // Enable RX FIFO reception interrupt (RXIE = 0)
+  writeShort(MRF_INTCON, 0b11110110);    // Enable RX FIFO and TX normal FIFO interrupts (RXIE = 0, TXNIE = 0)
   enablePaLna();                         // Enable PA and LNA control
-  
+
   setPanId(panId);
   setChannel(11);                        // Set default channel (must keep 11) and reset state machine
   delay(2);                              // Let RF stabilize
@@ -404,11 +692,10 @@ uint8_t Nanoshield_MRF::readShort(uint8_t addr) {
 }
 
 void Nanoshield_MRF::setPromiscuous(boolean enabled) {
-    if (enabled) {
-        writeShort(MRF_RXMCR, 0x01);
-    } else {
-        writeShort(MRF_RXMCR, 0x00);
-    }
+  take();
+  promiscuous = enabled;
+  writeShort(MRF_RXMCR, enabled ? 0x01 : 0x00);
+  give();
 }
 
 void Nanoshield_MRF::writeShort(uint8_t addr, uint8_t data) {

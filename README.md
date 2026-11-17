@@ -91,40 +91,40 @@ void loop(){
 
 ### Buttons
 
-On the board are placed two programmable buttons, defined by the pins `BTN_1` and `BTN_2`. To be enabled you must call the `init_buttons()` function and also update the status ofthe button by the main `loop`:
+On the board are placed two programmable buttons, defined by the pins `BTN_1` and `BTN_2`. To be enabled you must call the `init_buttons()` function. The buttons are interrupt driven: every change of the pin wakes a background task that waits until the pin is stable for `BUTTON_DEBOUNCE_DELAY` ms (30) and then calls the callbacks, so nothing has to be called in the `loop()`.
+
+After the initialisation, the buttons pointer will be available to register a callback for the press and the release of each button, with `onBtn1Press`, `onBtn2Press`, `onBtn1Release` and `onBtn2Release`. The callback gets the pin of the button:
 
 ```cpp
-void setup(){
-    IoTBoard::init_buttons();
-}
-
-void loop(){
-    buttons->update();
-}
-```
-
-After the initialisation, the buttons pointer will be avaiable to manage the release of each button, by using the methods `onBtn1Release` and `onBtn2Release` to register the callback function for each button:
-
-```cpp
-void onBtn1Released(uint8_t pinBtn){
+void onBtn1Pressed(uint8_t pinBtn){
     Serial.println("BTN 1 pressed");
 }
 
+void onBtn1Released(uint8_t pinBtn){
+    Serial.println("BTN 1 released");
+}
+
 void onBtn2Released(uint8_t pinBtn){
-    Serial.println("BTN 2 pressed");
+    Serial.println("BTN 2 released");
 }
 
 void setup(){
     IoTBoard::init_serial();
     IoTBoard::init_buttons();
+    buttons->onBtn1Press(onBtn1Pressed);
     buttons->onBtn1Release(onBtn1Released);
     buttons->onBtn2Release(onBtn2Released);
 }
 
 void loop(){
-    buttons->update();
+    if(buttons->isBtn2Pressed()){
+        Serial.println("BTN 2 is down");
+    }
+    delay(100);
 }
 ```
+
+The callbacks run in the background task, in parallel with the `loop()`: keep them short and use the display only from one of the two. Do not attach other interrupts to `BTN_1` and `BTN_2`. `buttons->update()` is still available for old sketches, but it does nothing.
 
 ### LEDs
 
@@ -322,38 +322,73 @@ The mesh uses the Wi-Fi interface of the board, so it can not be used together w
 
 ### Zigbee
 
+The `zigbee` object drives the MRF24J40 802.15.4 radio (raw 802.15.4 frames, not the ZigBee stack). The driver is interrupt driven: the radio `INT` pin must be wired to `ZIGBEE_INT` (A3), otherwise `init_zigbee()` returns `false`. A background task, woken by the interrupt, empties the radio RX FIFO into a queue of 8 frames and stores the result of every transmission, so the radio never stays blocked even if the `loop()` is slow. Do not attach other interrupts to `ZIGBEE_INT`.
+
+Frames are received with a callback, called by the library (in its own task) for every frame; transmissions are done in the `loop()`:
+
 ```cpp
 #include <iot_board.h>
 
-const char *str;
+uint16_t count_sent = 0;
+
+void onZigbeeReceive(rx_info_t *packet)
+{
+    // packet->rx_data / payload_length: payload; read*() and readString() work too
+    Serial.printf("from %04X to %04X PAN %04X: %s (%d dBm)\n", packet->src_addr, packet->dest_addr,
+                  packet->panid, zigbee->readString(), packet->rssi);
+}
 
 void setup()
 {
-
+    IoTBoard::init_serial();
     IoTBoard::init_spi();
-    IoTBoard::init_zigbee();
+    if (!IoTBoard::init_zigbee()) {
+        Serial.println("INT not wired");
+    }
 
     zigbee->setAddress(0x1);
     zigbee->setPanId(0x8888);
     zigbee->setChannel(12);
+    zigbee->onReceiveCallback(onZigbeeReceive);
 }
 
 void loop()
 {
-    String s = "Hello " + String(count_sent);
+    String s = "Hello " + String(count_sent++);
     zigbee->startPacket();
     zigbee->writeString((char *)s.c_str());
-    zigbee->sendPacket(0xffff, false);
-    while (!zigbee->transmissionSuccess()){
+    zigbee->sendPacket(0xffff, false);          // broadcast, no ACK
+    while (!zigbee->transmissionDone()){         // set by the TX interrupt
         delay(1);
     }
-    if (zigbee->receivePacket()){
-        str = zigbee->readString();
-    }
-
-
+    bool ok = zigbee->transmissionSuccess();     // ACK received (if requested)
+    delay(500);
 }
 ```
+
+The callback runs in parallel with the `loop()`: keep it short and use the display only from one of the two. See `examples/zigbee/zigbee_callback.cpp`.
+
+Without a callback the frames wait in the queue and can be taken in the `loop()`. Use `while`, not `if`: with one frame per iteration a slow `loop()` loses frames (counted by `droppedPackets()`):
+
+```cpp
+while (zigbee->receivePacket()){             // take every queued frame
+    const char *str = zigbee->readString();
+    rx_info_t *p = zigbee->getRXPacket();    // MAC details of this frame
+    Serial.printf("%s from %04X, %d dBm\n", str, p->src_addr, p->rssi);
+}
+```
+
+With a callback set, `receivePacket()` returns nothing.
+
+| Method | Description |
+|--------|-------------|
+| `sendPacket(dest, ack)` | sends the payload written with `write*()`; waits if the previous TX is still running |
+| `transmissionDone()` / `transmissionSuccess()` / `getRetries()` | end, result and retransmissions of the last TX |
+| `receivePacket()` / `packetsAvailable()` | takes the next frame from the queue / frames waiting |
+| `getRXPacket()` | `rx_info_t`: `src_addr`, `dest_addr`, `panid`, `seq`, `rssi` (dBm), `lqi`, `payload_length`, `rx_data` |
+| `onReceiveCallback(f)` | calls `f(rx_info_t*)` for every frame (`nullptr` to go back to `receivePacket()`) |
+| `droppedPackets()` | frames lost because the queue was full |
+| `getAddress()` / `getPanId()` / `getChannel()` | current settings |
 
 ### LoRa
 

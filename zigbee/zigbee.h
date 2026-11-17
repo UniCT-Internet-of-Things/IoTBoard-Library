@@ -11,7 +11,7 @@
 class Zigbee: public Nanoshield_MRF{
 
     public:
-        Zigbee(SPIClass * spi) : Nanoshield_MRF(MRF24J40MA, ZIGBEE_CS, spi){};
+        Zigbee(SPIClass * spi) : Nanoshield_MRF(MRF24J40MA, ZIGBEE_CS, spi, ZIGBEE_INT){};
 
 };
 

@@ -86,9 +86,11 @@ bool IoTBoardClass::init_zigbee(){
         return false;
     }
     zigbee = new Zigbee(radios_spi);
-    zigbee->begin();
+    if(!zigbee->begin()){
+        Serial.println("[ERROR][Zigbee] The MRF24J40 INT pin is not connected to ZIGBEE_INT (A3)");
+        return false;
+    }
     isZigbeeActivated = true;
-    //attachInterrupt(ZIGBEE_INT, zigbee_interrupt_handler, CHANGE);
 
     Serial.println("[OK]\tZigbee Initialised");
     return true;

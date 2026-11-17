@@ -34,7 +34,7 @@ void loop()
     zigbee->startPacket();
     zigbee->writeString((char *)s.c_str());
     zigbee->sendPacket(0xffff, false);
-    while (!zigbee->transmissionSuccess()){
+    while (!zigbee->transmissionDone()){
         delay(1);
     }
     count_sent = count_sent + 1;
