@@ -91,40 +91,40 @@ void loop(){
 
 ### Buttons
 
-On the board are placed two programmable buttons, defined by the pins `BTN_1` and `BTN_2`. To be enabled you must call the `init_buttons()` function and also update the status ofthe button by the main `loop`:
+On the board are placed two programmable buttons, defined by the pins `BTN_1` and `BTN_2`. To be enabled you must call the `init_buttons()` function. The buttons are interrupt driven: every change of the pin wakes a background task that waits until the pin is stable for `BUTTON_DEBOUNCE_DELAY` ms (30) and then calls the callbacks, so nothing has to be called in the `loop()`.
+
+After the initialisation, the buttons pointer will be available to register a callback for the press and the release of each button, with `onBtn1Press`, `onBtn2Press`, `onBtn1Release` and `onBtn2Release`. The callback gets the pin of the button:
 
 ```cpp
-void setup(){
-    IoTBoard::init_buttons();
-}
-
-void loop(){
-    buttons->update();
-}
-```
-
-After the initialisation, the buttons pointer will be avaiable to manage the release of each button, by using the methods `onBtn1Release` and `onBtn2Release` to register the callback function for each button:
-
-```cpp
-void onBtn1Released(uint8_t pinBtn){
+void onBtn1Pressed(uint8_t pinBtn){
     Serial.println("BTN 1 pressed");
 }
 
+void onBtn1Released(uint8_t pinBtn){
+    Serial.println("BTN 1 released");
+}
+
 void onBtn2Released(uint8_t pinBtn){
-    Serial.println("BTN 2 pressed");
+    Serial.println("BTN 2 released");
 }
 
 void setup(){
     IoTBoard::init_serial();
     IoTBoard::init_buttons();
+    buttons->onBtn1Press(onBtn1Pressed);
     buttons->onBtn1Release(onBtn1Released);
     buttons->onBtn2Release(onBtn2Released);
 }
 
 void loop(){
-    buttons->update();
+    if(buttons->isBtn2Pressed()){
+        Serial.println("BTN 2 is down");
+    }
+    delay(100);
 }
 ```
+
+The callbacks run in the background task, in parallel with the `loop()`: keep them short and use the display only from one of the two. Do not attach other interrupts to `BTN_1` and `BTN_2`. `buttons->update()` is still available for old sketches, but it does nothing.
 
 ### LEDs
 
